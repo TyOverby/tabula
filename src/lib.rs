@@ -2,7 +2,7 @@ extern crate parrot;
 
 pub mod components;
 
-pub use parrot::geom::{Rect, Point};
+pub use parrot::geom::{Rect, Point, Vector};
 
 #[macro_export]
 macro_rules! id {
@@ -19,10 +19,9 @@ pub fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect<f32> {
     Rect(start, start + size)
 }
 
-pub trait BasicRenderer: components::ButtonRender {
-}
+pub trait BasicRenderer: components::ButtonRender + components::SliderRender { }
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone, Ord, PartialOrd)]
+#[derive(Debug, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub struct Id {
     line: u32,
     column: u32,
@@ -30,6 +29,7 @@ pub struct Id {
     aux_2: u32,
     aux_3: u32,
     file: &'static str,
+    parent: Option<Box<Id>>,
 }
 
 #[derive(Debug, PartialEq, Copy, Clone, PartialOrd)]
@@ -39,8 +39,8 @@ pub enum Event {
     PointerUp(EventSource),
 }
 
-#[derive(Eq, Debug, PartialEq, Copy, Clone, Ord, PartialOrd)]
-pub struct EventSource(pub u32);
+#[derive(Eq, Debug, PartialEq, Copy, Clone, Ord, PartialOrd, Hash)]
+pub struct EventSource(pub u32, pub u32);
 
 pub struct UnloadedUiContext {
     pub component_state: ComponentState,
@@ -53,6 +53,7 @@ pub struct ComponentState {
 }
 
 pub struct EventData {
+    pub prev_positions: Vec<(EventSource, Point<f32>)>,
     pub positions: Vec<(EventSource, Point<f32>)>,
     pub down: Vec<EventSource>,
     pub up: Vec<EventSource>,
@@ -72,31 +73,53 @@ impl Id {
             aux_2: aux_2,
             aux_3: aux_3,
             file: file,
+            parent: None,
         }
+    }
+
+    pub fn with_parent(mut self, other: Id) -> Id {
+        self.parent = Some(Box::new(other));
+        self
     }
 }
 
 impl EventData {
     pub fn new() -> EventData {
         EventData {
+            prev_positions: vec![],
             positions: vec![],
             down: vec![],
             up: vec![],
         }
     }
 
-    pub fn went_down(&self, source: EventSource) -> bool {
-        self.down.iter().any(|&a| source == a)
+    pub fn pointer_movement(&self, source: &EventSource) -> Option<(f32, f32)> {
+        match (EventData::fetch_position(&self.positions, source),
+               EventData::fetch_position(&self.prev_positions, source)) {
+            (Some(pos), Some(prev)) => {
+                let Vector(x, y) = pos - prev;
+                Some((x, y))
+            }
+            _ => None
+        }
     }
 
-    pub fn went_up(&self, source: EventSource) -> bool {
-        self.up.iter().any(|&a| source == a)
+    pub fn went_down(&self, source: &EventSource) -> bool {
+        self.down.iter().any(|&a| *source == a)
     }
 
-    pub fn position_of(&self, source: EventSource) -> Option<Point<f32>> {
-        self.positions.iter().filter_map(|&(s, pos)| 
-            if s == source { Some(pos) } else { None }
+    pub fn went_up(&self, source: &EventSource) -> bool {
+        self.up.iter().any(|&a| *source == a)
+    }
+
+    fn fetch_position(list: &[(EventSource, Point<f32>)], source: &EventSource) -> Option<Point<f32>> {
+        list.iter().filter_map(|&(s, pos)|
+            if s == *source { Some(pos) } else { None }
         ).next()
+    }
+
+    pub fn position_of(&self, source: &EventSource) -> Option<Point<f32>> {
+        EventData::fetch_position(&self.positions, source)
     }
 }
 
@@ -108,61 +131,60 @@ impl ComponentState {
         }
     }
 
-    fn mark(coll: &mut Vec<(Id, EventSource)>, id: Id, because: EventSource) {
+    fn mark(coll: &mut Vec<(Id, EventSource)>, id: &Id, because: EventSource) {
         // Update an existing active reason if one exists
-        for &mut (e_id, ref mut reason) in coll.iter_mut() {
-            if e_id == id {
+        for &mut (ref e_id, ref mut reason) in coll.iter_mut() {
+            if *e_id == *id {
                 *reason = because;
                 return;
             }
         }
-        coll.push((id, because));
+        coll.push((id.clone(), because));
     }
 
-    pub fn make_active(&mut self, id: Id, because: EventSource) {
+    pub fn make_active(&mut self, id: &Id, because: EventSource) {
         Self::mark(&mut self.active, id, because);
     }
 
-    pub fn make_hot(&mut self, id: Id, because: EventSource) {
+    pub fn make_hot(&mut self, id: &Id, because: EventSource) {
         Self::mark(&mut self.hot, id, because);
     }
 
-    pub fn remove_all_active(&mut self, id: Id) {
-        self.active.retain(|&(a, _)| a != id);
+    pub fn remove_all_active(&mut self, id: &Id) {
+        self.active.retain(|&(ref a, _)| *a != *id);
     }
 
-    pub fn remove_active(&mut self, id: Id, because: EventSource) {
-        self.active.retain(|&(a, b)| a != id || b != because);
+    pub fn remove_active(&mut self, id: &Id, because: EventSource) {
+        self.active.retain(|&(ref a, b)| *a != *id || b != because);
     }
 
-    pub fn remove_hot(&mut self, id: Id, because: EventSource) {
-        self.hot.retain(|&(a, b)| a != id || b != because);
+    pub fn remove_hot(&mut self, id: &Id, because: EventSource) {
+        self.hot.retain(|&(ref a, b)| *a != *id || b != because);
     }
 
-    pub fn remove_all_hot(&mut self, id: Id) {
-        self.hot.retain(|&(a, _)| a != id);
+    pub fn remove_all_hot(&mut self, id: &Id) {
+        self.hot.retain(|&(ref a, _)| *a != *id);
     }
 
-    pub fn is_active(&self, id: Id) -> bool {
-        self.active.iter().any(|&(a, _)| a == id)
+    pub fn is_active(&self, id: &Id) -> bool {
+        self.active.iter().any(|&(ref a, _)| *a == *id)
     }
 
-    pub fn is_hot(&self, id: Id) -> bool {
-        self.hot.iter().any(|&(a, _)| a == id)
+    pub fn is_hot(&self, id: &Id) -> bool {
+        self.hot.iter().any(|&(ref a, _)| *a == *id)
     }
 
-    pub fn why_hot(&self, id: Id) -> Vec<EventSource> {
-        self.hot.iter().filter_map(|&(i, e)| if i == id { Some(e) } else { None }).collect()
+    pub fn why_hot(&self, id: &Id) -> Vec<EventSource> {
+        self.hot.iter().filter_map(|&(ref i, e)| if *i == *id { Some(e) } else { None }).collect()
     }
 
-    pub fn why_active(&self, id: Id) -> Vec<EventSource> {
-        self.active.iter().filter_map(|&(i, e)| if i == id { Some(e) } else { None }).collect()
+    pub fn why_active(&self, id: &Id) -> Vec<EventSource> {
+        self.active.iter().filter_map(|&(ref i, e)| if *i == *id { Some(e) } else { None }).collect()
     }
 }
 
 impl UnloadedUiContext {
     pub fn new() -> UnloadedUiContext {
-        use std::f32::NAN;
         UnloadedUiContext {
             component_state: ComponentState::new(),
             event_data: EventData::new(),
@@ -177,6 +199,7 @@ impl UnloadedUiContext {
     }
 
     fn switch_frames(&mut self) {
+        self.event_data.prev_positions = self.event_data.positions.clone();
         self.event_data.down.clear();
         self.event_data.up.clear();
     }
