@@ -1,4 +1,4 @@
-use ::{ UnloadedUiContext, UiContext, Rect, Id };
+use ::{ UiState, UiContext, Rect, Id };
 use parrot::geom::{Contains};
 
 pub trait ButtonRender {
@@ -14,11 +14,11 @@ pub trait ButtonRender {
 }
 
 pub fn button<B: ButtonRender>(ctx: &mut UiContext<B>, id: Id, rect: Rect<f32>, label: &str) -> Result<bool, B::Error> {
-    let &mut UnloadedUiContext { ref mut component_state, ref event_data }  = ctx.state;
+    let &mut UiState { ref mut component_state, ref event_data }  = ctx.state;
     let mut activated = false;
 
     let mut any_over = false;
-    for &(source, pos) in &event_data.positions {
+    for (source, pos) in event_data.positions() {
         if rect.contains(pos) {
             any_over = true;
 

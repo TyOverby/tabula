@@ -12,14 +12,12 @@ macro_rules! id {
     ($a: expr, $b: expr, $c: expr) => (::tabula::Id::new(file!(), line!(), column!(), a, b, c));
 }
 
-pub fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect<f32> {
-    use ::parrot::geom::{Point, Vector};
-    let start = Point(x, y);
-    let size = Vector(w, h);
-    Rect(start, start + size)
-}
+pub struct NullRenderer;
 
-pub trait BasicRenderer: components::ButtonRender + components::SliderRender { }
+pub struct PositionIterator<'a> {
+    slice: &'a[(EventSource, Point<f32>)],
+    offset: (f32, f32),
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub struct Id {
@@ -42,7 +40,7 @@ pub enum Event {
 #[derive(Eq, Debug, PartialEq, Copy, Clone, Ord, PartialOrd, Hash)]
 pub struct EventSource(pub u32, pub u32);
 
-pub struct UnloadedUiContext {
+pub struct UiState {
     pub component_state: ComponentState,
     pub event_data: EventData,
 }
@@ -53,15 +51,16 @@ pub struct ComponentState {
 }
 
 pub struct EventData {
-    pub prev_positions: Vec<(EventSource, Point<f32>)>,
-    pub positions: Vec<(EventSource, Point<f32>)>,
-    pub down: Vec<EventSource>,
-    pub up: Vec<EventSource>,
+    prev_positions: Vec<(EventSource, Point<f32>)>,
+    positions: Vec<(EventSource, Point<f32>)>,
+    down: Vec<EventSource>,
+    up: Vec<EventSource>,
+    offset: (f32, f32)
 }
 
-pub struct UiContext<'a, B> {
-    pub backend: B,
-    pub state: &'a mut UnloadedUiContext,
+pub struct UiContext<'a, B: 'a> {
+    pub backend: &'a mut B,
+    pub state: &'a mut UiState,
 }
 
 impl Id {
@@ -90,7 +89,20 @@ impl EventData {
             positions: vec![],
             down: vec![],
             up: vec![],
+            offset: (0.0, 0.0),
         }
+    }
+
+    pub fn positions(&self) -> PositionIterator {
+        PositionIterator {
+            slice: &self.positions,
+            offset: self.offset,
+        }
+    }
+
+    pub fn offset(&mut self, x: f32, y: f32) {
+        self.offset.0 += x;
+        self.offset.1 += y;
     }
 
     pub fn pointer_movement(&self, source: &EventSource) -> Option<(f32, f32)> {
@@ -183,15 +195,15 @@ impl ComponentState {
     }
 }
 
-impl UnloadedUiContext {
-    pub fn new() -> UnloadedUiContext {
-        UnloadedUiContext {
+impl UiState {
+    pub fn new() -> UiState {
+        UiState {
             component_state: ComponentState::new(),
             event_data: EventData::new(),
         }
     }
 
-    pub fn load<'a, B>(&'a mut self, b: B) -> UiContext<B> {
+    pub fn load<'a, B>(&'a mut self, b: &'a mut B) -> UiContext<B> {
         UiContext {
             backend: b,
             state: self
@@ -227,5 +239,43 @@ impl UnloadedUiContext {
     pub fn feed_events_for_frame<I: Iterator<Item=Event>>(&mut self, events: I) {
         self.switch_frames();
         for event in events { self.feed_event(event); }
+    }
+}
+
+impl components::ButtonRender for NullRenderer {
+    type Error = ();
+
+    fn draw_button(&mut self, _: &Id, _: Rect<f32>, _: &str, _: bool, _: bool) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+impl components::SliderRender for NullRenderer {
+    type Error = ();
+
+    fn draw_slider(&mut self, _: Id, _: Rect<f32>, _: f32) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+impl components::DragRegionRender for NullRenderer {
+    type Error = ();
+
+    fn draw_drag_region(&mut self, _: &Id, _: Rect<f32>, _: components::DragAction) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+impl <'a> Iterator for PositionIterator<'a> {
+    type Item = (EventSource, Point<f32>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.slice.len() == 0 {
+            return None;
+        }
+
+        let (f_es, f_pt) = self.slice[0];
+        self.slice = &self.slice[1 ..];
+        Some((f_es, Point(f_pt.0 - self.offset.0, f_pt.1 - self.offset.1)))
     }
 }

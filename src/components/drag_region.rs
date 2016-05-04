@@ -1,4 +1,4 @@
-use ::{ UnloadedUiContext, UiContext, Rect, Id };
+use ::{ UiState, UiContext, Rect, Id };
 use parrot::geom::{Contains};
 
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Copy, Clone)]
@@ -21,7 +21,7 @@ pub trait DragRegionRender {
 
 /// Creates a dragable region that can be clicked and dragged.
 pub fn drag_region<B: DragRegionRender>(ctx: &mut UiContext<B>, id: Id, rect: &mut Rect<f32>) -> Result<DragAction, B::Error> {
-    let &mut UnloadedUiContext { ref mut component_state, ref event_data }  = ctx.state;
+    let &mut UiState { ref mut component_state, ref event_data }  = ctx.state;
 
     let mut action = DragAction::None;
 
@@ -42,7 +42,7 @@ pub fn drag_region<B: DragRegionRender>(ctx: &mut UiContext<B>, id: Id, rect: &m
             action = DragAction::Holding;
         }
     } else {
-        for &(source, pos) in &event_data.positions {
+        for (source, pos) in event_data.positions() {
             if rect.contains(pos) && event_data.went_down(&source) {
                 component_state.make_active(&id, source);
                 action = DragAction::PickedUp;
