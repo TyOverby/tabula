@@ -4,6 +4,7 @@ use parrot::geom::{Contains};
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Copy, Clone)]
 pub enum DragAction {
     None,
+    Hovering,
     PickedUp,
     Holding,
     Dropped,
@@ -43,10 +44,15 @@ pub fn drag_region<B: DragRegionRender>(ctx: &mut UiContext<B>, id: Id, rect: &m
         }
     } else {
         for (source, pos) in event_data.positions() {
-            if rect.contains(pos) && event_data.went_down(&source) {
-                component_state.make_active(&id, source);
-                action = DragAction::PickedUp;
-                break;
+            if rect.contains(pos) {
+                if action == DragAction::None {
+                    action = DragAction::Hovering;
+                }
+                if event_data.went_down(&source) {
+                    component_state.make_active(&id, source);
+                    action = DragAction::PickedUp;
+                    break;
+                }
             }
         }
     }

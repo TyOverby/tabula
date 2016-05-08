@@ -1,21 +1,23 @@
 extern crate parrot;
 
-pub mod components;
-
 pub use parrot::geom::{Rect, Point, Vector};
+use parrot::geom::{Contains, Translate};
 
 #[macro_export]
 macro_rules! id {
-    () => (::tabula::Id::new(file!(), line!(), column!(), 0,  0, 0));
-    ($a: expr) => (::tabula::Id::new(file!(), line!(), column!(), a, 0, 0));
-    ($a: expr, $b: expr) => (::tabula::Id::new(file!(), line!(), column!(), a, b, 0));
-    ($a: expr, $b: expr, $c: expr) => (::tabula::Id::new(file!(), line!(), column!(), a, b, c));
+    () => ($crate::Id::new(file!(), line!(), column!(), 0,  0, 0));
+    ($a: expr) => ($crate::Id::new(file!(), line!(), column!(), a, 0, 0));
+    ($a: expr, $b: expr) => ($crate::Id::new(file!(), line!(), column!(), a, b, 0));
+    ($a: expr, $b: expr, $c: expr) => ($crate::Id::new(file!(), line!(), column!(), a, b, c));
 }
+
+pub mod components;
 
 pub struct NullRenderer;
 
 pub struct PositionIterator<'a> {
     slice: &'a[(EventSource, Point<f32>)],
+    masks: &'a[Rect<f32>],
     offset: (f32, f32),
 }
 
@@ -55,7 +57,8 @@ pub struct EventData {
     positions: Vec<(EventSource, Point<f32>)>,
     down: Vec<EventSource>,
     up: Vec<EventSource>,
-    offset: (f32, f32)
+    offset: (f32, f32),
+    masks: Vec<Rect<f32>>,
 }
 
 pub struct UiContext<'a, B: 'a> {
@@ -90,12 +93,14 @@ impl EventData {
             down: vec![],
             up: vec![],
             offset: (0.0, 0.0),
+            masks: vec![],
         }
     }
 
     pub fn positions(&self) -> PositionIterator {
         PositionIterator {
             slice: &self.positions,
+            masks: &self.masks,
             offset: self.offset,
         }
     }
@@ -105,10 +110,25 @@ impl EventData {
         self.offset.1 += y;
     }
 
+    fn is_in_mask(&self, p: Point<f32>) -> bool {
+        self.masks.iter().all(|mask| mask.contains(p))
+    }
+
+    pub fn push_mask(&mut self, mask: Rect<f32>) {
+        let mask = mask.translate(self.offset.0, self.offset.1);
+        self.masks.push(mask);
+    }
+
+    pub fn pop_mask(&mut self) {
+        self.masks.pop();
+    }
+
     pub fn pointer_movement(&self, source: &EventSource) -> Option<(f32, f32)> {
-        match (EventData::fetch_position(&self.positions, source),
-               EventData::fetch_position(&self.prev_positions, source)) {
-            (Some(pos), Some(prev)) => {
+        // Don't worry about the offset for these calls to fetch_position, because
+        // we are just calculating a delta anyway.
+        match (EventData::fetch_position(self.positions.iter().cloned(), source),
+               EventData::fetch_position(self.prev_positions.iter().cloned(), source)) {
+            (Some(pos), Some(prev)) if self.is_in_mask(prev) => {
                 let Vector(x, y) = pos - prev;
                 Some((x, y))
             }
@@ -124,14 +144,18 @@ impl EventData {
         self.up.iter().any(|&a| *source == a)
     }
 
-    fn fetch_position(list: &[(EventSource, Point<f32>)], source: &EventSource) -> Option<Point<f32>> {
-        list.iter().filter_map(|&(s, pos)|
+    fn fetch_position<I>(list: I, source: &EventSource) -> Option<Point<f32>>
+    where I: Iterator<Item=(EventSource, Point<f32>)>{
+        list.filter_map(|(s, pos)|
             if s == *source { Some(pos) } else { None }
         ).next()
     }
 
     pub fn position_of(&self, source: &EventSource) -> Option<Point<f32>> {
-        EventData::fetch_position(&self.positions, source)
+        match EventData::fetch_position(self.positions(), source) {
+            Some(p) if self.is_in_mask(p) => Some(p),
+            _ => None
+        }
     }
 }
 
@@ -242,6 +266,17 @@ impl UiState {
     }
 }
 
+impl <'a, T> UiContext<'a, T> {
+    pub fn with_other_backend<O, F, R>(&mut self, other: &mut O, f: F) -> R
+    where F: for<'c> FnOnce(&'c mut UiContext<'c, O>) -> R {
+        let &mut UiContext { ref mut state, .. } = self;
+        {
+            let mut temp = UiContext {state: state, backend: other};
+            f(&mut temp)
+        }
+    }
+}
+
 impl components::ButtonRender for NullRenderer {
     type Error = ();
 
@@ -276,6 +311,11 @@ impl <'a> Iterator for PositionIterator<'a> {
 
         let (f_es, f_pt) = self.slice[0];
         self.slice = &self.slice[1 ..];
-        Some((f_es, Point(f_pt.0 - self.offset.0, f_pt.1 - self.offset.1)))
+        let new_point = Point(f_pt.0 - self.offset.0, f_pt.1 - self.offset.1);
+        if self.masks.iter().all(|mask| mask.contains(f_pt)) {
+            Some((f_es, new_point))
+        } else {
+            self.next()
+        }
     }
 }
